@@ -22,7 +22,11 @@ pub fn derive_kek_argon2id(
 ) -> anyhow::Result<[u8; KEY_LEN]> {
     let params = Params::new(m_cost_kib, t_cost, 1, Some(KEY_LEN))
         .map_err(|e| anyhow::anyhow!("argon2 params: {e}"))?;
-    let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+    let argon2 = Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        params.clone(),
+    );
 
     // PasswordHasher API expects a SaltString; we pass raw salt as base64-like string.
     // To keep file format stable we store salt raw in header.
