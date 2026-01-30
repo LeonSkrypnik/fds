@@ -1,7 +1,6 @@
 use crate::crypto::{aead_decrypt, aead_encrypt, hkdf_derive, random_bytes, KEY_LEN};
 use crate::fsmeta::{ChunkRef, Metadata, NodeType};
 use anyhow::Context;
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
