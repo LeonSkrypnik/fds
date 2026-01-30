@@ -1,0 +1,49 @@
+name: build-windows
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'vault/**'
+      - '.github/workflows/build-windows.yml'
+  pull_request:
+    paths:
+      - 'vault/**'
+      - '.github/workflows/build-windows.yml'
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: vault
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            vault -> target
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp target/release/vault.exe dist/vault.exe
+          cp README.md dist/README.md
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vault-windows-x64
+          path: vault/dist/
+          if-no-files-found: error
