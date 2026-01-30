@@ -2,6 +2,7 @@ use crate::container;
 use crate::fsmeta::NodeType;
 use eframe::egui;
 use rfd::FileDialog;
+use std::path::PathBuf;
 use zeroize::Zeroize;
 
 pub fn run() -> anyhow::Result<()> {
@@ -280,9 +281,14 @@ impl eframe::App for VaultApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let Some(sess) = self.sess.as_mut() else {
-                return;
-            };
+            // Сначала собираем действия (клики) в переменные, а изменения контейнера делаем ПОСЛЕ ui.horizontal.
+            let mut do_mkdir: Option<String> = None;
+            let mut do_import: Option<PathBuf> = None;
+            let mut do_export: bool = false;
+            let mut do_delete: bool = false;
+            let mut do_view: bool = false;
+            let mut do_start_rename: bool = false;
+            let mut do_apply_rename: bool = false;
 
             ui.horizontal(|ui| {
                 ui.label(format!("Текущая папка: id={}", self.current_dir_id));
@@ -291,11 +297,61 @@ impl eframe::App for VaultApp {
                 ui.label("Новая папка:");
                 ui.text_edit_singleline(&mut self.new_folder_name);
                 if ui.button("Создать").clicked() {
-                    let name = self.new_folder_name.trim();
-                    if name.is_empty() {
+                    do_mkdir = Some(self.new_folder_name.trim().to_string());
+                }
+
+                ui.separator();
+
+                if ui.button("Импорт файла").clicked() {
+                    if let Some(p) = FileDialog::new().pick_file() {
+                        do_import = Some(p);
+                    }
+                }
+
+                if ui.button("Экспорт").clicked() {
+                    do_export = true;
+                }
+
+                if ui.button("Переименовать").clicked() {
+                    do_start_rename = true;
+                }
+
+                if ui.button("Удалить").clicked() {
+                    do_delete = true;
+                }
+
+                if ui.button("Просмотр").clicked() {
+                    do_view = true;
+                }
+            });
+
+            // start rename
+            if do_start_rename {
+                self.rename_to = self.selected_node_name();
+            }
+
+            // rename editor
+            if !self.rename_to.is_empty() {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Новое имя:");
+                    ui.text_edit_singleline(&mut self.rename_to);
+                    if ui.button("OK").clicked() {
+                        do_apply_rename = true;
+                    }
+                    if ui.button("Отмена").clicked() {
+                        self.rename_to.clear();
+                    }
+                });
+            }
+
+            // Выполняем операции над контейнером здесь (нет borrow-конфликтов с egui).
+            if let Some(sess) = self.sess.as_mut() {
+                if let Some(name) = do_mkdir {
+                    if name.trim().is_empty() {
                         self.status = "Введите имя папки".to_string();
                     } else {
-                        match sess.meta.mkdir(self.current_dir_id, name.to_string()) {
+                        match sess.meta.mkdir(self.current_dir_id, name) {
                             Ok(new_id) => {
                                 if let Err(e) = container::save_metadata(sess, &self.unlocked_password) {
                                     self.status = format!("save: {e}");
@@ -310,78 +366,59 @@ impl eframe::App for VaultApp {
                     }
                 }
 
-                ui.separator();
-
-                if ui.button("Импорт файла").clicked() {
-                    if let Some(p) = FileDialog::new().pick_file() {
-                        match container::import_file(sess, &self.unlocked_password, &p, self.current_dir_id, None) {
-                            Ok(id) => {
-                                self.selected_id = Some(id);
-                                self.status.clear();
-                            }
-                            Err(e) => self.status = format!("import: {e}"),
+                if let Some(p) = do_import {
+                    match container::import_file(sess, &self.unlocked_password, &p, self.current_dir_id, None) {
+                        Ok(id) => {
+                            self.selected_id = Some(id);
+                            self.status.clear();
                         }
+                        Err(e) => self.status = format!("import: {e}"),
                     }
                 }
 
-                if ui.button("Экспорт").clicked() {
-                    let Some(id) = self.selected_id else {
-                        self.status = "Выберите файл".to_string();
-                        return;
-                    };
-                    let Some(node) = sess.meta.get_node(id) else {
-                        self.status = "Не найдено".to_string();
-                        return;
-                    };
-                    if node.node_type != NodeType::File {
-                        self.status = "Экспорт только для файлов".to_string();
-                        return;
-                    }
-                    if let Some(out) = FileDialog::new().set_file_name(&node.name).save_file() {
-                        if let Err(e) = container::export_file(sess, id, &out) {
-                            self.status = format!("export: {e}");
+                if do_export {
+                    if let Some(id) = self.selected_id {
+                        if let Some(node) = sess.meta.get_node(id) {
+                            if node.node_type != NodeType::File {
+                                self.status = "Экспорт только для файлов".to_string();
+                            } else if let Some(out) =
+                                FileDialog::new().set_file_name(&node.name).save_file()
+                            {
+                                if let Err(e) = container::export_file(sess, id, &out) {
+                                    self.status = format!("export: {e}");
+                                } else {
+                                    self.status = "Экспортировано".to_string();
+                                }
+                            }
                         } else {
-                            self.status = "Экспортировано".to_string();
+                            self.status = "Не найдено".to_string();
                         }
+                    } else {
+                        self.status = "Выберите файл".to_string();
                     }
                 }
 
-                if ui.button("Переименовать").clicked() {
-                    self.rename_to = self.selected_node_name();
-                }
-
-                if ui.button("Удалить").clicked() {
-                    let Some(id) = self.selected_id else {
-                        return;
-                    };
-                    match sess.meta.remove_subtree(id) {
-                        Ok(()) => match container::save_metadata(sess, &self.unlocked_password) {
-                            Ok(()) => {
-                                self.selected_id = None;
-                                self.viewer_mode = ViewerMode::None;
-                                self.viewer_bytes = None;
-                                self.status = "Удалено (MVP: место в контейнере не очищается)".to_string();
-                            }
-                            Err(e) => self.status = format!("save: {e}"),
-                        },
-                        Err(e) => self.status = format!("delete: {e}"),
+                if do_delete {
+                    if let Some(id) = self.selected_id {
+                        match sess.meta.remove_subtree(id) {
+                            Ok(()) => match container::save_metadata(sess, &self.unlocked_password) {
+                                Ok(()) => {
+                                    self.selected_id = None;
+                                    self.viewer_mode = ViewerMode::None;
+                                    self.viewer_bytes = None;
+                                    self.status = "Удалено (MVP: место в контейнере не очищается)".to_string();
+                                }
+                                Err(e) => self.status = format!("save: {e}"),
+                            },
+                            Err(e) => self.status = format!("delete: {e}"),
+                        }
+                    } else {
+                        self.status = "Ничего не выбрано".to_string();
                     }
                 }
 
-                if ui.button("Просмотр").clicked() {
-                    self.load_viewer(ctx);
-                }
-            });
-
-            if !self.rename_to.is_empty() {
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Новое имя:");
-                    ui.text_edit_singleline(&mut self.rename_to);
-                    if ui.button("OK").clicked() {
-                        let Some(id) = self.selected_id else {
-                            return;
-                        };
+                if do_apply_rename {
+                    if let Some(id) = self.selected_id {
                         match sess.meta.rename(id, self.rename_to.trim().to_string()) {
                             Ok(()) => match container::save_metadata(sess, &self.unlocked_password) {
                                 Ok(()) => {
@@ -392,17 +429,25 @@ impl eframe::App for VaultApp {
                             },
                             Err(e) => self.status = format!("rename: {e}"),
                         }
+                    } else {
+                        self.status = "Ничего не выбрано".to_string();
                     }
-                    if ui.button("Отмена").clicked() {
-                        self.rename_to.clear();
-                    }
-                });
+                }
+            }
+
+            if do_view {
+                self.load_viewer(ctx);
             }
 
             ui.separator();
             ui.heading("Содержимое");
 
-            let children = sess.meta.children_of(self.current_dir_id);
+            let children = self
+                .sess
+                .as_ref()
+                .map(|s| s.meta.children_of(self.current_dir_id))
+                .unwrap_or_default();
+
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for n in children {
                     let label = match n.node_type {
