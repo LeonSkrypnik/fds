@@ -13,7 +13,7 @@ pub fn run() -> anyhow::Result<()> {
     eframe::run_native(
         "Vault",
         native_options,
-        Box::new(|_cc| Ok(Box::new(VaultApp::default()))),
+        Box::new(|_cc| Box::new(VaultApp::default())),
     )
     .map_err(|e| anyhow::anyhow!("gui: {e}"))?;
 
@@ -118,21 +118,23 @@ impl VaultApp {
     }
 
     fn render_dir_tree(&mut self, ui: &mut egui::Ui, parent_id: u64) {
-        let Some(sess) = &self.sess else {
-            return;
+        // Важно: не держим borrow на self.sess во время рекурсивного вызова.
+        let dirs: Vec<(u64, String)> = match self.sess.as_ref() {
+            Some(sess) => sess
+                .meta
+                .children_of(parent_id)
+                .into_iter()
+                .filter(|n| n.node_type == NodeType::Dir)
+                .map(|n| (n.id, n.name.clone()))
+                .collect(),
+            None => return,
         };
-        let dirs = sess
-            .meta
-            .children_of(parent_id)
-            .into_iter()
-            .filter(|n| n.node_type == NodeType::Dir)
-            .collect::<Vec<_>>();
 
-        for d in dirs {
-            let label = if self.current_dir_id == d.id {
-                format!("📁 {}", d.name)
+        for (dir_id, dir_name) in dirs {
+            let label = if self.current_dir_id == dir_id {
+                format!("📁 {}", dir_name)
             } else {
-                d.name.clone()
+                dir_name
             };
 
             egui::CollapsingHeader::new(label)
@@ -140,11 +142,11 @@ impl VaultApp {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if ui.button("Открыть").clicked() {
-                            self.current_dir_id = d.id;
-                            self.selected_id = Some(d.id);
+                            self.current_dir_id = dir_id;
+                            self.selected_id = Some(dir_id);
                         }
                     });
-                    self.render_dir_tree(ui, d.id);
+                    self.render_dir_tree(ui, dir_id);
                 });
         }
     }
@@ -440,7 +442,7 @@ impl eframe::App for VaultApp {
                         let mut size = tex.size_vec2();
                         let scale = (avail.x / size.x).min(avail.y / size.y).min(1.0);
                         size *= scale;
-                        ui.image(tex, size);
+                        ui.add(egui::Image::new(tex).fit_to_exact_size(size));
                     } else {
                         ui.label("(не удалось загрузить изображение)");
                     }
