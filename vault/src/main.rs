@@ -1,6 +1,7 @@
 mod container;
 mod crypto;
 mod fsmeta;
+mod gui;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -91,6 +92,11 @@ enum Cmd {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Если запуск без аргументов (двойной клик по .exe) — открываем GUI.
+    if std::env::args().len() == 1 {
+        return gui::run();
+    }
+
     let cli = Cli::parse();
 
     match cli.cmd {

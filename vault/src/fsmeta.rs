@@ -143,4 +143,26 @@ impl Metadata {
         n.name = new_name;
         Ok(())
     }
+
+    pub fn remove_subtree(&mut self, id: u64) -> anyhow::Result<()> {
+        if id == self.root_id {
+            anyhow::bail!("cannot remove root");
+        }
+        if self.get_node(id).is_none() {
+            anyhow::bail!("not found");
+        }
+
+        // Collect ids in subtree.
+        let mut stack = vec![id];
+        let mut to_remove: Vec<u64> = vec![];
+        while let Some(cur) = stack.pop() {
+            to_remove.push(cur);
+            for ch in self.nodes.iter().filter(|n| n.parent_id == cur) {
+                stack.push(ch.id);
+            }
+        }
+
+        self.nodes.retain(|n| !to_remove.contains(&n.id));
+        Ok(())
+    }
 }

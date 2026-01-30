@@ -233,6 +233,39 @@ pub fn import_file(sess: &mut Session, password: &str, os_path: &Path, parent_id
     Ok(file_id)
 }
 
+pub fn read_file_bytes(sess: &Session, file_id: u64) -> anyhow::Result<Vec<u8>> {
+    let n = sess
+        .meta
+        .get_node(file_id)
+        .ok_or_else(|| anyhow::anyhow!("not found"))?;
+    if n.node_type != NodeType::File {
+        anyhow::bail!("not a file");
+    }
+
+    let mut vf = File::open(&sess.path)?;
+    let mut len4 = [0u8; 4];
+    vf.read_exact(&mut len4)?;
+    let header_len = u32::from_le_bytes(len4) as u64;
+    vf.seek(SeekFrom::Start(4 + header_len))?;
+    let data_start = vf.stream_position()?;
+
+    let file_key = hkdf_derive(&sess.master_key, format!("file:{file_id}").as_bytes())?;
+
+    let mut out_bytes = Vec::with_capacity(n.size as usize);
+    for ch in &n.chunks {
+        let chunk_key = hkdf_derive(&file_key, format!("chunk:{}", ch.index).as_bytes())?;
+        let aad = format!("{file_id}:{}", ch.index).into_bytes();
+
+        vf.seek(SeekFrom::Start(data_start + ch.offset))?;
+        let mut cipher = vec![0u8; ch.len as usize];
+        vf.read_exact(&mut cipher)?;
+        let plain = aead_decrypt(&chunk_key, &ch.nonce, &aad, &cipher)?;
+        out_bytes.extend_from_slice(&plain);
+    }
+
+    Ok(out_bytes)
+}
+
 pub fn export_file(sess: &Session, file_id: u64, out_path: &Path) -> anyhow::Result<()> {
     let n = sess.meta.get_node(file_id).ok_or_else(|| anyhow::anyhow!("not found"))?;
     if n.node_type != NodeType::File {
